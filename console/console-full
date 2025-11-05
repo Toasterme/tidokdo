@@ -58,25 +58,172 @@ function isInPostPage() {
 // Fonction pour liker le post principal et tous les commentaires
 async function likePostAndComments(config) {
     console.log("\n🔍 Recherche des boutons like dans ce post...");
-    
+
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Trouver TOUS les boutons de vote sur la page
-    const allButtons = Array.from(document.querySelectorAll('button.styled__VoteButton-sc-1e3d9on-2'));
-    
-    if (allButtons.length === 0) {
-        console.log("⚠️ Aucun bouton like trouvé dans ce post.");
+    const threadRootSelectors = [
+        '[data-testid="post-thread"]',
+        '[data-testid="post-view"]',
+        '[data-testid="post"]',
+        '[data-testid="post-wrapper"]',
+        'article[data-testid*="post"]',
+        'section[data-testid*="post"]',
+        'main [data-testid="post"]',
+        'main article',
+        '[role="main"] article',
+    ];
+
+    let threadRoot = null;
+    let threadSelectorUsed = null;
+
+    for (const selector of threadRootSelectors) {
+        const candidate = document.querySelector(selector);
+        if (candidate) {
+            threadRoot = candidate;
+            threadSelectorUsed = selector;
+            break;
+        }
+    }
+
+    if (!threadRoot) {
+        threadRoot = document.querySelector('main');
+        if (threadRoot) {
+            threadSelectorUsed = 'main';
+        }
+    }
+
+    if (!threadRoot) {
+        threadRoot = document.body;
+    }
+
+    if (threadSelectorUsed && threadRoot !== document.body) {
+        if (threadSelectorUsed === 'main') {
+            console.log("ℹ️ Aucun conteneur dédié n'a été trouvé, balayage limité au <main>.");
+        } else {
+            console.log(`🧭 Conteneur du post détecté via le sélecteur: ${threadSelectorUsed}`);
+        }
+    } else {
+        console.log("⚠️ Conteneur du post non détecté, utilisation d'un balayage global.");
+        console.log("   Astuce: si la structure DOM évolue, mettez à jour les sélecteurs dans la fonction likePostAndComments.");
+    }
+
+    const navigationContainerSelectors = 'header, nav, [data-testid="header"], [data-testid="navigation"], [data-testid="top-nav"], [role="banner"], [role="navigation"]';
+
+    const isInNavigation = (element) => Boolean(element.closest(navigationContainerSelectors));
+
+    const commentContainerSelectors = [
+        '[data-testid="comment"]',
+        '[data-testid="reply"]',
+        '[data-testid="comment-card"]',
+        '[data-testid="comment-item"]',
+        '[data-testid="comment-thread-item"]',
+        '[data-testid="comment-container"]',
+        '[class*="CommentItem"]',
+        '[class*="CommentCard"]',
+    ];
+
+    const findCommentContainer = (element) => commentContainerSelectors
+        .map(selector => element.closest(selector))
+        .find(Boolean);
+
+    const orderedButtons = [];
+
+    const postLikeSelectors = [
+        '[data-testid="post-like-button"]',
+        '[data-testid="like-button"][aria-label*="post"]',
+        '[data-testid="thread-like-button"]',
+        'button[aria-label*="Like this post"]',
+        'button[aria-label*="J\'aime ce post"]',
+        'button[aria-label*="Aimer ce post"]',
+        'button[class*="PostVoteButton"]',
+        'button[class*="PostLikeButton"]',
+    ];
+
+    const postLikeButton = postLikeSelectors
+        .map(selector => threadRoot.querySelector(selector))
+        .find(button => button && !isInNavigation(button));
+
+    const buttonScore = (button) => {
+        const aria = button.getAttribute('aria-label') || '';
+        const testId = button.getAttribute('data-testid') || '';
+        const title = button.getAttribute('title') || '';
+        const name = typeof button.className === 'string' ? button.className : '';
+
+        let score = 0;
+
+        if (/like|j'aime|aimer|vote|upvote/i.test(aria)) score += 3;
+        if (/like|vote|upvote/i.test(testId)) score += 2;
+        if (/like|vote/i.test(title)) score += 1;
+        if (/VoteButton|LikeButton/i.test(name)) score += 1;
+
+        return score;
+    };
+
+    const rawCandidates = Array.from(threadRoot.querySelectorAll('button'))
+        .filter(btn => !isInNavigation(btn));
+
+    const candidateButtons = rawCandidates
+        .filter(button => buttonScore(button) > 0);
+
+    const uniqueCandidateButtons = candidateButtons.filter((button, index, self) =>
+        index === self.findIndex(other => other === button)
+    );
+
+    if (candidateButtons.length === 0) {
+        console.log("⚠️ Aucun bouton de like trouvé dans le conteneur analysé.");
+    } else {
+        const preview = candidateButtons.slice(0, 3).map(btn => {
+            const aria = btn.getAttribute('aria-label') || '-';
+            const testId = btn.getAttribute('data-testid') || '-';
+            const classes = typeof btn.className === 'string' ? btn.className : '-';
+            return `{aria: "${aria}", data-testid: "${testId}", class: "${classes.substring(0, 60)}"}`;
+        });
+        console.log(`   ➕ Boutons candidats détectés: ${candidateButtons.length}`);
+        console.log(`   🧪 Aperçu attributs: ${preview.join(' | ')}`);
+    }
+
+    const commentButtons = uniqueCandidateButtons
+        .map(button => ({ button, container: findCommentContainer(button) }))
+        .filter(({ container }) => Boolean(container));
+
+    const mainButtons = uniqueCandidateButtons
+        .filter(button => !findCommentContainer(button));
+
+    if (postLikeButton && !mainButtons.includes(postLikeButton)) {
+        mainButtons.unshift(postLikeButton);
+    }
+
+    if (mainButtons.length > 0) {
+        orderedButtons.push({ button: mainButtons[0], label: "📌 Post principal" });
+    }
+
+    if (mainButtons.length > 1) {
+        mainButtons.slice(1).forEach((button, index) => {
+            if (!orderedButtons.some(entry => entry.button === button)) {
+                orderedButtons.push({ button, label: `📌 Post supplémentaire ${index + 1}` });
+            }
+        });
+    }
+
+    commentButtons.forEach(({ button }, index) => {
+        if (!orderedButtons.some(entry => entry.button === button)) {
+            orderedButtons.push({ button, label: `💬 Commentaire ${index + 1}` });
+        }
+    });
+
+    if (orderedButtons.length === 0) {
+        console.log("⚠️ Aucun bouton like exploitable n'a été détecté.");
         return 0;
     }
 
-    console.log(`✓ ${allButtons.length} boutons trouvés (post + commentaires)\n`);
+    console.log(`✓ ${orderedButtons.length} boutons trouvés (post + commentaires)\n`);
 
     let likedCount = 0;
     let alreadyLikedCount = 0;
-    
+
     // Liker tous les boutons un par un
-    for (let i = 0; i < allButtons.length; i++) {
-        const likeButton = allButtons[i];
+    for (let i = 0; i < orderedButtons.length; i++) {
+        const { button: likeButton, label } = orderedButtons[i];
         
         // Délai aléatoire avant chaque action
         let currentDelay = getRandomDelay(config.minDelay, config.maxDelay);
@@ -109,18 +256,16 @@ async function likePostAndComments(config) {
                 likeButton.click();
                 likedCount++;
                 totalLikes++;
-                
-                const label = i === 0 ? "📌 Post principal" : `💬 Commentaire ${likedCount - 1}`;
-                console.log(`✓ ${label} liké (${i + 1}/${allButtons.length})`);
-                
+
+                console.log(`✓ ${label} liké (${i + 1}/${orderedButtons.length})`);
+
                 setTimeout(() => {
                     likeButton.style.border = '3px solid green';
                     likeButton.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
                 }, 100);
             } else {
                 alreadyLikedCount++;
-                const label = i === 0 ? "Post principal" : `Commentaire ${i}`;
-                console.log(`⊘ ${label} déjà liké (${i + 1}/${allButtons.length})`);
+                console.log(`⊘ ${label} déjà liké (${i + 1}/${orderedButtons.length})`);
                 
                 likeButton.style.border = '3px solid orange';
                 likeButton.style.backgroundColor = 'rgba(255, 165, 0, 0.1)';
@@ -135,7 +280,7 @@ async function likePostAndComments(config) {
             console.error(`❌ Erreur sur le bouton ${i + 1}:`, err);
         }
     }
-    
+
     console.log(`\n✅ Post terminé: ${likedCount} likes ajoutés, ${alreadyLikedCount} ignorés\n`);
     return likedCount;
 }
